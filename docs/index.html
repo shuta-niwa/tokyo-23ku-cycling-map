@@ -34,6 +34,12 @@
     background: rgba(255,255,255,.92); color: #222; cursor: pointer;
     max-width: 80%;
   }
+  /* マップ固有の注意書き（例：フェリー必須） */
+  #mapNote {
+    margin-top: 6px; font-size: 12px; font-weight: 700;
+    color: #fff3c4;
+  }
+  #mapNote:empty { display: none; }
 
   /* 現在地ボタン */
   #recenter {
@@ -52,6 +58,7 @@
   <div id="statusMain">現在地を取得中…</div>
   <div id="statusSub">位置情報を許可してください</div>
   <select id="mapSelect" title="一周マップを切り替え"></select>
+  <div id="mapNote"></div>
 </div>
 <div id="map"></div>
 <button id="recenter" title="現在地へ移動">◎</button>
@@ -103,10 +110,53 @@ const MAPS = [
     insideLabel: (p) => `${p.name}（23区内）`, outsideLabel: "23区外",
   },
   {
-    id: "tokyobay", label: "東京湾一周（約200km・試作）",
+    id: "yamanote", label: "山手線一周（約43km・試作）",
+    regionsUrl: "yamanote.geojson", boundaryUrl: null,
+    center: [35.68, 139.74], zoom: 12, multiColor: false, fillColor: "#7cb342",
+    insideLabel: () => "山手線の内側", outsideLabel: "山手線の外側",
+  },
+  {
+    id: "teganuma", label: "手賀沼一周（約20km・試作）",
+    regionsUrl: "teganuma.geojson", boundaryUrl: null,
+    center: [35.865, 140.04], zoom: 13, multiColor: false, fillColor: "#43a047",
+    insideLabel: () => "手賀沼エリア内", outsideLabel: "手賀沼エリア外",
+  },
+  {
+    id: "hamana", label: "ハマイチ（浜名湖一周 約65km・試作）",
+    regionsUrl: "hamana.geojson", boundaryUrl: null,
+    center: [34.74, 137.61], zoom: 11, multiColor: false, fillColor: "#0097a7",
+    insideLabel: () => "浜名湖エリア内", outsideLabel: "浜名湖エリア外",
+  },
+  {
+    id: "miura", label: "ミウライチ（三浦半島一周 約80km・試作）",
+    regionsUrl: "miura.geojson", boundaryUrl: null,
+    center: [35.22, 139.63], zoom: 12, multiColor: false, fillColor: "#5e35b1",
+    insideLabel: () => "三浦半島エリア内", outsideLabel: "三浦半島エリア外",
+  },
+  {
+    id: "kasumigaura", label: "カスイチ（霞ヶ浦一周 約140km・試作）",
+    regionsUrl: "kasumigaura.geojson", boundaryUrl: null,
+    center: [36.03, 140.38], zoom: 11, multiColor: false, fillColor: "#00897b",
+    insideLabel: () => "霞ヶ浦エリア内", outsideLabel: "霞ヶ浦エリア外",
+  },
+  {
+    id: "fuji", label: "フジイチ（富士山一周 約150km・試作）",
+    regionsUrl: "fuji.geojson", boundaryUrl: null,
+    center: [35.36, 138.73], zoom: 11, multiColor: false, fillColor: "#2e7d32",
+    insideLabel: () => "富士山エリア内", outsideLabel: "富士山エリア外",
+  },
+  {
+    id: "biwako", label: "ビワイチ（琵琶湖一周 約200km・試作）",
+    regionsUrl: "biwako.geojson", boundaryUrl: null,
+    center: [35.28, 136.07], zoom: 10, multiColor: false, fillColor: "#0288d1",
+    insideLabel: () => "琵琶湖エリア内", outsideLabel: "琵琶湖エリア外",
+  },
+  {
+    id: "tokyobay", label: "東京湾一周（約200km・フェリー必須/試作）",
     regionsUrl: "tokyobay.geojson", boundaryUrl: null,
     center: [35.45, 139.85], zoom: 10, multiColor: false, fillColor: "#1e88e5",
     insideLabel: () => "東京湾エリア内", outsideLabel: "東京湾エリア外",
+    note: "⚠ 湾口は東京湾フェリー(金谷↔久里浜)必須。自転車だけでは一周できません。",
   },
 ];
 
@@ -147,6 +197,7 @@ function clearMapLayers() {
 function loadMap(cfg, { recenter = true } = {}) {
   activeMap = cfg;
   clearMapLayers();
+  document.getElementById("mapNote").textContent = cfg.note || "";
   setStatus("unknown", "読み込み中…", cfg.label);
 
   const jobs = [fetch(cfg.regionsUrl).then((r) => r.json())];
