@@ -152,33 +152,43 @@ console.log(`\n${OUT}`);
 console.log(`走行ルート: ${coords.length} 点 / 約 ${len.toFixed(1)} km`);
 
 // ---- 密集箇所（短縮候補）の検出 ----
-// 狭いセル(約CELL_M四方)に詰まっている経路長を集計し、しきい値超のセルを
-// 「線が密集＝短縮候補」としてマーキング用に出力（例：羽田空港周辺の往復）。
-const CELL_M = Number(process.env.CELL || 350);       // セル一辺
-const HOT_LEN_KM = Number(process.env.HOTLEN || 0.7); // 1セルに詰まった経路長がこれ以上なら密集
+// 狭いセル(約CELL_M四方)について「経路長」と「訪問回数(=そのマスを別々に通った数)」
+// を集計。長いだけ(単純に曲がって通過しただけ)では誤検出になるので、
+// 「経路長が多い かつ 2回以上通っている(=往復している)」セルだけを密集と判定する。
+// 例：羽田空港周辺の往復は拾い、葛西のような一回曲がって通る所は拾わない。
+const CELL_M = Number(process.env.CELL || 350);        // セル一辺
+const HOT_LEN_KM = Number(process.env.HOTLEN || 0.7);  // セル内経路長の下限
+const MIN_VISITS = Number(process.env.VISITS || 2);    // 訪問回数の下限（往復判定）
 const LAT0 = 35.6, DEG_LAT = CELL_M / 1000 / 111, DEG_LNG = CELL_M / 1000 / (111 * Math.cos(LAT0 * Math.PI / 180));
 const rsH = resample(coords, 0.03); // 30m
+const keyOf = (p) => Math.round(p[0] / DEG_LNG) + "," + Math.round(p[1] / DEG_LAT);
+const kc = rsH.map(keyOf);
 const cells = new Map();
-for (let i = 1; i < rsH.length; i++) {
-  const seg = hav(rsH[i - 1], rsH[i]);
-  const mx = (rsH[i - 1][0] + rsH[i][0]) / 2, my = (rsH[i - 1][1] + rsH[i][1]) / 2;
-  const kx = Math.round(mx / DEG_LNG), ky = Math.round(my / DEG_LAT);
-  const key = kx + "," + ky;
-  const e = cells.get(key) || { len: 0, kx, ky };
-  e.len += seg; cells.set(key, e);
+for (let i = 0; i < rsH.length; i++) {
+  const seg = i < rsH.length - 1 ? hav(rsH[i], rsH[i + 1]) : 0;
+  const e = cells.get(kc[i]) || { len: 0, kx: Math.round(rsH[i][0] / DEG_LNG), ky: Math.round(rsH[i][1] / DEG_LAT) };
+  e.len += seg; cells.set(kc[i], e);
 }
-const hot = [...cells.values()].filter((c) => c.len >= HOT_LEN_KM)
+// 訪問回数：そのセルキーに連続して入った「まとまり」の数
+function visits(key) {
+  let v = 0, inside = false;
+  for (const c of kc) { if (c === key) { if (!inside) { v++; inside = true; } } else inside = false; }
+  return v;
+}
+const hot = [...cells.entries()]
+  .map(([k, c]) => ({ ...c, key: k, visits: visits(k) }))
+  .filter((c) => c.len >= HOT_LEN_KM && c.visits >= MIN_VISITS)
   .sort((a, b) => b.len - a.len);
 const hotFeatures = hot.map((c) => ({
   type: "Feature",
-  properties: { len_km: Number(c.len.toFixed(2)) },
-  geometry: { type: "Point", coordinates: [c.kx * DEG_LNG, c.ky * DEG_LAT] },
+  properties: { len_km: Number(c.len.toFixed(2)), visits: c.visits },
+  geometry: { type: "Point", coordinates: [Number((c.kx * DEG_LNG).toFixed(5)), Number((c.ky * DEG_LAT).toFixed(5))] },
 }));
 const HOT_OUT = path.join(__dirname, "docs", "tokyo23-route-hotspots.geojson");
 fs.writeFileSync(HOT_OUT, JSON.stringify({
   type: "FeatureCollection",
-  _note: `走行ルートで線が密集している(=短縮候補の)箇所。${CELL_M}m四方に経路長${HOT_LEN_KM}km以上が詰まったセルの中心。`,
+  _note: `走行ルートで線が密集(=短縮候補)の箇所。${CELL_M}m四方に経路長${HOT_LEN_KM}km以上 かつ ${MIN_VISITS}回以上通っているセル。`,
   features: hotFeatures,
 }));
-console.log(`\n密集セル(短縮候補): ${hotFeatures.length} 箇所`);
-hot.slice(0, 8).forEach((c) => console.log(`  [${(c.kx * DEG_LNG).toFixed(4)}, ${(c.ky * DEG_LAT).toFixed(4)}] 経路長 ${c.len.toFixed(2)}km`));
+console.log(`\n密集セル(短縮候補): ${hotFeatures.length} 箇所（経路長≥${HOT_LEN_KM}km かつ 訪問≥${MIN_VISITS}）`);
+hot.slice(0, 8).forEach((c) => console.log(`  [${(c.kx * DEG_LNG).toFixed(4)}, ${(c.ky * DEG_LAT).toFixed(4)}] 経路長 ${c.len.toFixed(2)}km / 訪問 ${c.visits}`));
