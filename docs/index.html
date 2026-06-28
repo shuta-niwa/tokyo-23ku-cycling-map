@@ -104,10 +104,12 @@ function pointInFeature(pt, geom) {
 //   multiColor=true は各 feature が独自 color を持つ場合（23区）。
 const MAPS = [
   {
-    id: "tokyo23", label: "東京23区一周（外周 約100km）",
+    id: "tokyo23", label: "東京23区一周（境界ルート 約205km）",
     regionsUrl: "wards.geojson", boundaryUrl: "boundary.geojson",
+    routeUrl: "tokyo23-route.geojson",
     center: [35.6895, 139.7], zoom: 11, multiColor: true,
     insideLabel: (p) => `${p.name}（23区内）`, outsideLabel: "23区外",
+    note: "🚲 赤線＝境界に最も近い走行ルート（実際の道にスナップ）。黒線＝区境。",
   },
   {
     id: "yamanote", label: "山手線一周（約43km・試作）",
@@ -200,11 +202,15 @@ function loadMap(cfg, { recenter = true } = {}) {
   document.getElementById("mapNote").textContent = cfg.note || "";
   setStatus("unknown", "読み込み中…", cfg.label);
 
-  const jobs = [fetch(cfg.regionsUrl).then((r) => r.json())];
-  if (cfg.boundaryUrl) jobs.push(fetch(cfg.boundaryUrl).then((r) => r.json()));
+  const jobs = { regions: fetch(cfg.regionsUrl).then((r) => r.json()) };
+  if (cfg.boundaryUrl) jobs.boundary = fetch(cfg.boundaryUrl).then((r) => r.json());
+  if (cfg.routeUrl) jobs.route = fetch(cfg.routeUrl).then((r) => r.json());
 
-  Promise.all(jobs).then(([regions, boundary]) => {
+  Promise.all(Object.entries(jobs).map(([k, p]) => p.then((v) => [k, v])))
+    .then((entries) => {
+    const { regions, boundary, route } = Object.fromEntries(entries);
     regionFeatures = regions.features;
+    const hasRoute = !!route;
 
     // 範囲を色塗り
     const regionLayer = L.geoJSON(regions, {
@@ -215,13 +221,23 @@ function loadMap(cfg, { recenter = true } = {}) {
     }).addTo(map);
     mapLayers.push(regionLayer);
 
-    // ルート/外周線を太線で強調（boundary があればそれ、無ければ範囲の輪郭）
+    // 外周線/境界線（走行ルートがある時は細い破線にして赤線を目立たせる）
     if (boundary) {
       const bLayer = L.geoJSON(boundary, {
-        style: { color: "#111", weight: 4, fill: false, opacity: 0.85 },
+        style: hasRoute
+          ? { color: "#111", weight: 2, fill: false, opacity: 0.6, dashArray: "4 4" }
+          : { color: "#111", weight: 4, fill: false, opacity: 0.85 },
         interactive: false,
       }).addTo(map);
       mapLayers.push(bLayer);
+    }
+
+    // 境界に最も近い走行ルート（実際の道）を赤い太線で強調
+    if (route) {
+      const rLayer = L.geoJSON(route, {
+        style: { color: "#d81b60", weight: 5, fill: false, opacity: 0.9, lineCap: "round", lineJoin: "round" },
+      }).bindTooltip(`${route.features[0].properties.name}（約${route.features[0].properties.distance_km}km）`, { sticky: true }).addTo(map);
+      mapLayers.push(rLayer);
     }
 
     if (recenter) map.setView(cfg.center, cfg.zoom);

@@ -31,9 +31,15 @@
 - `docs/index.html` … アプリ本体（依存ライブラリは Leaflet のみ、CDN 読み込み）
 - `docs/wards.geojson` … 23区ポリゴン（区ごと・色付き）
 - `docs/boundary.geojson` … 23区全体の外周ライン
-- `docs/tokyobay.geojson` … 東京湾一周エリア（概形ポリゴン1枚／試作）
+- `docs/tokyobay.geojson` 他 … 各一周マップの範囲ポリゴン（試作・概形）
+- `docs/tokyo23-route.geojson` … 23区境界を実際の道にスナップした走行ルート（約205km／BRouter生成）
 - `build.js` … 23区データから wards/boundary GeoJSON を生成するビルドスクリプト
+- `build-route.js` … boundary を BRouter(自転車)で実際の道にスナップし走行ルートを生成（`node build-route.js`）
 - `data/` … 23区の元データ（国土数値情報 N03 / 13101〜13123）
+
+### 走行ルート（境界に最も近い道）
+
+23区マップでは、区境（黒い破線）に加えて**境界に最も近い走行ルート（赤い実線）**を表示する。`build-route.js` が境界線を等間隔にリサンプルし、BRouter の自転車プロファイルで経由点間を道沿いにルーティングして生成する。実際に境界を道で辿ると約205km（巷の「23区一周 約100km」は境界を厳密には辿らずショートカットした距離）。
 
 ## 一周マップを追加する
 
