@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>東京23区 境界マップ</title>
+<title>境界マップ（東京23区 / 東京湾一周）</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <style>
@@ -27,6 +27,14 @@
   #statusMain { font-size: 30px; font-weight: 800; line-height: 1.15; letter-spacing: .02em; }
   #statusSub { font-size: 14px; opacity: .92; margin-top: 3px; min-height: 1em; }
 
+  /* マップ切替セレクタ（ステータスバー内） */
+  #mapSelect {
+    margin-top: 8px; font-size: 14px; font-weight: 600;
+    padding: 5px 10px; border-radius: 8px; border: none;
+    background: rgba(255,255,255,.92); color: #222; cursor: pointer;
+    max-width: 80%;
+  }
+
   /* 現在地ボタン */
   #recenter {
     position: absolute; right: 14px; bottom: calc(20px + env(safe-area-inset-bottom, 0px));
@@ -43,6 +51,7 @@
 <div id="status" class="unknown">
   <div id="statusMain">現在地を取得中…</div>
   <div id="statusSub">位置情報を許可してください</div>
+  <select id="mapSelect" title="一周マップを切り替え"></select>
 </div>
 <div id="map"></div>
 <button id="recenter" title="現在地へ移動">◎</button>
@@ -82,7 +91,29 @@ function pointInFeature(pt, geom) {
   return count % 2 === 1;
 }
 
-let wardFeatures = [];
+// ---- 一周マップの登録（ここに追加していけば増やせる）----
+// regions: 色塗りする範囲(GeoJSON)。boundary: 太線で強調するルート/外周線。
+//   boundary を省略すると regions の輪郭をルートとして太線描画する。
+//   multiColor=true は各 feature が独自 color を持つ場合（23区）。
+const MAPS = [
+  {
+    id: "tokyo23", label: "東京23区一周（外周 約100km）",
+    regionsUrl: "wards.geojson", boundaryUrl: "boundary.geojson",
+    center: [35.6895, 139.7], zoom: 11, multiColor: true,
+    insideLabel: (p) => `${p.name}（23区内）`, outsideLabel: "23区外",
+  },
+  {
+    id: "tokyobay", label: "東京湾一周（約200km・試作）",
+    regionsUrl: "tokyobay.geojson", boundaryUrl: null,
+    center: [35.45, 139.85], zoom: 10, multiColor: false, fillColor: "#1e88e5",
+    insideLabel: () => "東京湾エリア内", outsideLabel: "東京湾エリア外",
+  },
+];
+
+let activeMap = MAPS[0];   // 現在表示中のマップ設定
+let regionFeatures = [];   // 内外判定に使う range の features
+let mapLayers = [];        // 切替時に消すための Leaflet レイヤー
+let lastPos = null;        // マップ切替時に直近位置で再判定するため
 
 // ---- ステータス更新 ----
 function setStatus(state, main, sub) {
@@ -91,48 +122,83 @@ function setStatus(state, main, sub) {
   document.getElementById("statusMain").textContent = main;
   document.getElementById("statusSub").textContent = sub || "";
 }
-function findWard(lng, lat) {
-  for (const f of wardFeatures) {
+function findRegion(lng, lat) {
+  for (const f of regionFeatures) {
     if (pointInFeature([lng, lat], f.geometry)) return f.properties;
   }
   return null;
 }
 function updateLocationStatus(lat, lng, accuracy) {
-  const w = findWard(lng, lat);
+  lastPos = { lat, lng, accuracy };
+  const p = findRegion(lng, lat);
   const acc = accuracy ? `±${Math.round(accuracy)}m` : "";
-  if (w) {
-    setStatus("inside", `${w.name}（23区内）`, `現在地 ${acc}`);
+  if (p) {
+    setStatus("inside", activeMap.insideLabel(p), `現在地 ${acc}`);
   } else {
-    setStatus("outside", "23区外", `現在地 ${acc}`);
+    setStatus("outside", activeMap.outsideLabel, `現在地 ${acc}`);
   }
 }
 
-// ---- レイヤー読み込み ----
-Promise.all([
-  fetch("wards.geojson").then((r) => r.json()),
-  fetch("boundary.geojson").then((r) => r.json()),
-]).then(([wards, boundary]) => {
-  wardFeatures = wards.features;
+// ---- マップ読み込み / 切替 ----
+function clearMapLayers() {
+  mapLayers.forEach((l) => map.removeLayer(l));
+  mapLayers = [];
+}
+function loadMap(cfg, { recenter = true } = {}) {
+  activeMap = cfg;
+  clearMapLayers();
+  setStatus("unknown", "読み込み中…", cfg.label);
 
-  // 23区を区ごとに色分け
-  L.geoJSON(wards, {
-    style: (f) => ({
-      color: f.properties.color, weight: 1, fillColor: f.properties.color,
-      fillOpacity: 0.28, opacity: 0.8,
-    }),
-    onEachFeature: (f, layer) => layer.bindTooltip(f.properties.name, { sticky: true }),
-  }).addTo(map);
+  const jobs = [fetch(cfg.regionsUrl).then((r) => r.json())];
+  if (cfg.boundaryUrl) jobs.push(fetch(cfg.boundaryUrl).then((r) => r.json()));
 
-  // 23区の外周ラインを太線で強調
-  L.geoJSON(boundary, {
-    style: { color: "#111", weight: 4, fill: false, opacity: 0.85 },
-    interactive: false,
-  }).addTo(map);
+  Promise.all(jobs).then(([regions, boundary]) => {
+    regionFeatures = regions.features;
 
-  startGeolocation();
-}).catch((e) => {
-  setStatus("unknown", "データ読み込みエラー", String(e));
-});
+    // 範囲を色塗り
+    const regionLayer = L.geoJSON(regions, {
+      style: (f) => cfg.multiColor
+        ? { color: f.properties.color, weight: 1, fillColor: f.properties.color, fillOpacity: 0.28, opacity: 0.8 }
+        : { color: "#111", weight: 4, fillColor: cfg.fillColor || f.properties.color || "#1e88e5", fillOpacity: 0.18, opacity: 0.85 },
+      onEachFeature: (f, layer) => f.properties.name && layer.bindTooltip(f.properties.name, { sticky: true }),
+    }).addTo(map);
+    mapLayers.push(regionLayer);
+
+    // ルート/外周線を太線で強調（boundary があればそれ、無ければ範囲の輪郭）
+    if (boundary) {
+      const bLayer = L.geoJSON(boundary, {
+        style: { color: "#111", weight: 4, fill: false, opacity: 0.85 },
+        interactive: false,
+      }).addTo(map);
+      mapLayers.push(bLayer);
+    }
+
+    if (recenter) map.setView(cfg.center, cfg.zoom);
+    // 既に位置がある場合は即再判定、無ければ位置取得待ち表示
+    if (lastPos) updateLocationStatus(lastPos.lat, lastPos.lng, lastPos.accuracy);
+    else setStatus("unknown", "現在地を取得中…", cfg.label);
+  }).catch((e) => {
+    setStatus("unknown", "データ読み込みエラー", String(e));
+  });
+}
+
+// ---- セレクタ初期化 ----
+(function initSelector() {
+  const sel = document.getElementById("mapSelect");
+  MAPS.forEach((m) => {
+    const o = document.createElement("option");
+    o.value = m.id; o.textContent = m.label; sel.appendChild(o);
+  });
+  sel.value = activeMap.id;
+  sel.addEventListener("change", () => {
+    const cfg = MAPS.find((m) => m.id === sel.value);
+    if (cfg) loadMap(cfg, { recenter: true });
+  });
+})();
+
+// 初回ロード（位置取得は1回だけ開始）
+loadMap(activeMap, { recenter: true });
+startGeolocation();
 
 // ---- 現在地 ----
 let meMarker, accCircle, hasCentered = false;
