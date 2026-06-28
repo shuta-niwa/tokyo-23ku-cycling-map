@@ -106,10 +106,10 @@ const MAPS = [
   {
     id: "tokyo23", label: "東京23区一周（境界ルート 約150km）",
     regionsUrl: "wards.geojson", boundaryUrl: "boundary.geojson",
-    routeUrl: "tokyo23-route.geojson",
+    routeUrl: "tokyo23-route.geojson", hotspotsUrl: "tokyo23-route-hotspots.geojson",
     center: [35.6895, 139.7], zoom: 11, multiColor: true,
     insideLabel: (p) => `${p.name}（23区内）`, outsideLabel: "23区外",
-    note: "🚲 赤線＝境界沿いの走行ルート（道にスナップ＋湾岸の細かい出っ張りはショートカット）。黒破線＝区境。",
+    note: "🚲 赤線＝走行ルート / 黒破線＝区境 / 🟠オレンジ円＝線が密集＝短縮候補（例:羽田周辺）。",
   },
   {
     id: "yamanote", label: "山手線一周（約43km・試作）",
@@ -205,10 +205,11 @@ function loadMap(cfg, { recenter = true } = {}) {
   const jobs = { regions: fetch(cfg.regionsUrl).then((r) => r.json()) };
   if (cfg.boundaryUrl) jobs.boundary = fetch(cfg.boundaryUrl).then((r) => r.json());
   if (cfg.routeUrl) jobs.route = fetch(cfg.routeUrl).then((r) => r.json());
+  if (cfg.hotspotsUrl) jobs.hotspots = fetch(cfg.hotspotsUrl).then((r) => r.json());
 
   Promise.all(Object.entries(jobs).map(([k, p]) => p.then((v) => [k, v])))
     .then((entries) => {
-    const { regions, boundary, route } = Object.fromEntries(entries);
+    const { regions, boundary, route, hotspots } = Object.fromEntries(entries);
     regionFeatures = regions.features;
     const hasRoute = !!route;
 
@@ -230,6 +231,17 @@ function loadMap(cfg, { recenter = true } = {}) {
         interactive: false,
       }).addTo(map);
       mapLayers.push(bLayer);
+    }
+
+    // 線が密集している＝短縮候補の箇所をオレンジ円でハイライト（ルートの下に敷く）
+    if (hotspots) {
+      hotspots.features.forEach((f) => {
+        const [lng, lat] = f.geometry.coordinates;
+        const circle = L.circle([lat, lng], {
+          radius: 320, color: "#ff6f00", weight: 2, fillColor: "#ff9800", fillOpacity: 0.3,
+        }).bindTooltip(`線が密集 → 短縮候補（この付近に約${f.properties.len_km}km）`, { sticky: true }).addTo(map);
+        mapLayers.push(circle);
+      });
     }
 
     // 境界に最も近い走行ルート（実際の道）を赤い太線で強調

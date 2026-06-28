@@ -150,3 +150,35 @@ const feature = {
 fs.writeFileSync(OUT, JSON.stringify(feature));
 console.log(`\n${OUT}`);
 console.log(`走行ルート: ${coords.length} 点 / 約 ${len.toFixed(1)} km`);
+
+// ---- 密集箇所（短縮候補）の検出 ----
+// 狭いセル(約CELL_M四方)に詰まっている経路長を集計し、しきい値超のセルを
+// 「線が密集＝短縮候補」としてマーキング用に出力（例：羽田空港周辺の往復）。
+const CELL_M = Number(process.env.CELL || 350);       // セル一辺
+const HOT_LEN_KM = Number(process.env.HOTLEN || 0.7); // 1セルに詰まった経路長がこれ以上なら密集
+const LAT0 = 35.6, DEG_LAT = CELL_M / 1000 / 111, DEG_LNG = CELL_M / 1000 / (111 * Math.cos(LAT0 * Math.PI / 180));
+const rsH = resample(coords, 0.03); // 30m
+const cells = new Map();
+for (let i = 1; i < rsH.length; i++) {
+  const seg = hav(rsH[i - 1], rsH[i]);
+  const mx = (rsH[i - 1][0] + rsH[i][0]) / 2, my = (rsH[i - 1][1] + rsH[i][1]) / 2;
+  const kx = Math.round(mx / DEG_LNG), ky = Math.round(my / DEG_LAT);
+  const key = kx + "," + ky;
+  const e = cells.get(key) || { len: 0, kx, ky };
+  e.len += seg; cells.set(key, e);
+}
+const hot = [...cells.values()].filter((c) => c.len >= HOT_LEN_KM)
+  .sort((a, b) => b.len - a.len);
+const hotFeatures = hot.map((c) => ({
+  type: "Feature",
+  properties: { len_km: Number(c.len.toFixed(2)) },
+  geometry: { type: "Point", coordinates: [c.kx * DEG_LNG, c.ky * DEG_LAT] },
+}));
+const HOT_OUT = path.join(__dirname, "docs", "tokyo23-route-hotspots.geojson");
+fs.writeFileSync(HOT_OUT, JSON.stringify({
+  type: "FeatureCollection",
+  _note: `走行ルートで線が密集している(=短縮候補の)箇所。${CELL_M}m四方に経路長${HOT_LEN_KM}km以上が詰まったセルの中心。`,
+  features: hotFeatures,
+}));
+console.log(`\n密集セル(短縮候補): ${hotFeatures.length} 箇所`);
+hot.slice(0, 8).forEach((c) => console.log(`  [${(c.kx * DEG_LNG).toFixed(4)}, ${(c.ky * DEG_LAT).toFixed(4)}] 経路長 ${c.len.toFixed(2)}km`));
