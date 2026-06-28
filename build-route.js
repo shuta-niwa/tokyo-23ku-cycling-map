@@ -8,8 +8,10 @@ const { execSync } = require("child_process");
 const turf = require("@turf/turf");
 
 const OUT = path.join(__dirname, "docs", "tokyo23-route.geojson");
-const SIMPLIFY_TOL = 0.004; // 蛇行を均す(~400m)。境界に密着させつつ実用化
-const SPACING_KM = 2.5;     // 経由点間隔（密=境界に密着）
+// 環境変数で上書き可（スイープ用）: TOL, SPACING, DESPIKE
+const SIMPLIFY_TOL = Number(process.env.TOL || 0.012); // 蛇行/出っ張りを均す(~1.3km)。湾岸のヒゲを消すため強め
+const SPACING_KM = Number(process.env.SPACING || 2.0); // 経由点間隔（密=境界に密着 / 疎=滑らか）
+const DESPIKE_M = Number(process.env.DESPIKE || 250);  // 生成ルートのヒゲ除去：往復幅がこれ未満なら刈る(m)
 const CHUNK = 16;           // 1リクエストあたりの経由点数（端点を次チャンクと共有）
 const PROFILE = "fastbike"; // 幹線寄りで余計な迂回を減らす
 
@@ -83,6 +85,54 @@ for (let i = 0; i < wp.length - 1; i += CHUNK - 1) {
   console.log(`  chunk ${chunkCount}: wp[${i}..${i + seg.length - 1}] -> total ${coords.length} pts`);
 }
 console.log(`道に乗らずブリッジした区間: ${skipped}`);
+
+// ---- ヒゲ（出っ張りへの往復）除去：ショートサーキット法 ----
+// まず50m間隔に均し、ある点から先で経路が D[m] 以内に戻ってきたら、その間の
+// 寄り道（往復・入り江への突っ込み）を丸ごと飛ばして直結する。長短に関係なく刈れる。
+function resample(line, stepKm) {
+  const out = [line[0]]; let acc = 0;
+  for (let i = 1; i < line.length; i++) {
+    acc += hav(line[i - 1], line[i]);
+    if (acc >= stepKm) { out.push(line[i]); acc = 0; }
+  }
+  out.push(line[line.length - 1]);
+  return out;
+}
+function despike(line, thM) {
+  const pts = resample(line, 0.05); // 50m
+  const D = thM / 1000, W = Math.round(3 / 0.05); // 探索窓 ~3km
+  const out = []; let i = 0;
+  while (i < pts.length) {
+    out.push(pts[i]);
+    let best = i;
+    for (let j = i + 2; j < Math.min(i + W, pts.length); j++) {
+      if (hav(pts[i], pts[j]) < D) best = j; // i に最も先で近接する点まで飛ばす
+    }
+    i = best > i ? best : i + 1;
+  }
+  return out;
+}
+// 滑らかさ指標：100m間隔に均してから鋭い折返し(<70°)の数を数える
+function smoothness(line) {
+  // resample ~100m
+  const rs = [line[0]]; let acc = 0;
+  for (let i = 1; i < line.length; i++) { acc += hav(line[i - 1], line[i]); if (acc >= 0.1) { rs.push(line[i]); acc = 0; } }
+  let hair = 0;
+  for (let i = 1; i < rs.length - 1; i++) {
+    const a = rs[i - 1], b = rs[i], c = rs[i + 1];
+    const v1 = [b[0] - a[0], b[1] - a[1]], v2 = [c[0] - b[0], c[1] - b[1]];
+    const d1 = Math.hypot(...v1), d2 = Math.hypot(...v2);
+    if (d1 === 0 || d2 === 0) continue;
+    const cos = (v1[0] * v2[0] + v1[1] * v2[1]) / (d1 * d2);
+    if (cos < Math.cos(70 * Math.PI / 180)) hair++; // 70°より鋭い折返し
+  }
+  return { hair, pts: rs.length };
+}
+
+const before = smoothness(coords);
+coords = despike(coords, DESPIKE_M);
+const after = smoothness(coords);
+console.log(`despike: ${before.pts}->${after.pts} 点 / 鋭い折返し ${before.hair}→${after.hair}`);
 
 // 走行距離（概算）
 let len = 0;
